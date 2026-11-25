@@ -1,0 +1,313 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>AllLink AI 智能中枢</title>
+  <style>
+    :root {
+      --bg: #0f172a;
+      --card: #1e293b;
+      --border: #334155;
+      --text: #f8fafc;
+      --muted: #94a3b8;
+      --primary: #3b82f6;
+      --primary-hover: #2563eb;
+      --ok: #22c55e;
+      --danger: #ef4444;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      padding: 16px;
+      max-width: 820px;
+      margin-inline: auto;
+    }
+    h1 { font-size: 20px; margin: 0 0 12px; display: flex; align-items: center; justify-content: space-between; }
+    .badge { font-size: 12px; padding: 3px 8px; border-radius: 999px; background: #1d4ed8; color: #dbeafe; }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 14px;
+      margin-bottom: 14px;
+    }
+    .card-title { font-size: 14px; color: var(--muted); margin: 0 0 10px; display: flex; justify-content: space-between; align-items: center; }
+    .chat-box {
+      height: 220px;
+      overflow-y: auto;
+      background: #0b1220;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px;
+      margin-bottom: 10px;
+      font-size: 14px;
+      line-height: 1.5;
+    }
+    .msg { margin-bottom: 8px; }
+    .msg.user { color: #93c5fd; }
+    .msg.bot { color: #e2e8f0; }
+    .msg.sys { color: var(--muted); font-size: 12px; }
+    .input-row { display: flex; gap: 8px; }
+    input[type="text"] {
+      flex: 1;
+      padding: 10px 12px;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: #0b1220;
+      color: var(--text);
+      font-size: 15px;
+      outline: none;
+    }
+    button {
+      padding: 9px 14px;
+      border: none;
+      border-radius: 8px;
+      background: var(--primary);
+      color: #fff;
+      font-size: 14px;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    button:hover { background: var(--primary-hover); }
+    button.secondary { background: #334155; }
+    button.recording { background: var(--danger); }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; }
+    .device-item {
+      background: #0b1220;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px;
+      font-size: 13px;
+    }
+    .btn-row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+    .btn-sm { padding: 5px 10px; font-size: 12px; }
+    .status-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--ok); margin-right: 6px; }
+  </style>
+</head>
+<body>
+  <h1>
+    <span>AllLink AI 音频与家居中枢</span>
+    <span class="badge" id="health-badge">连接中...</span>
+  </h1>
+
+  <!-- AI 自然语言指令区 -->
+  <div class="card">
+    <div class="card-title">
+      <span>AI 管家指令（支持自然语言多设备联动）</span>
+      <button class="secondary btn-sm" onclick="refreshAll()">刷新设备</button>
+    </div>
+    <div class="chat-box" id="chat-box">
+      <div class="msg sys">示例：让 HomePod 播报“准备开会了”，同时把 Windows 电脑静音、把客厅主灯打开。</div>
+    </div>
+    <div class="input-row">
+      <button id="mic-btn" class="secondary" onclick="toggleVoice()">按住/点击说话</button>
+      <input type="text" id="cmd-input" placeholder="输入自然语言指令..." onkeydown="if(event.key==='Enter') sendChat()" />
+      <button onclick="sendChat()">发送</button>
+    </div>
+  </div>
+
+  <!-- HomePod 快捷控制 -->
+  <div class="card">
+    <div class="card-title">
+      <span>HomePod 音频控制</span>
+      <button class="secondary btn-sm" onclick="discoverHomePods()">扫描局域网 HomePod</button>
+    </div>
+    <div id="homepod-list" class="grid">
+      <div class="device-item">点击右上角“扫描局域网 HomePod”发现设备</div>
+    </div>
+  </div>
+
+  <!-- 电脑设备 -->
+  <div class="card">
+    <div class="card-title"><span>在线电脑设备 (Windows / Mac)</span></div>
+    <div id="pc-list" class="grid"></div>
+  </div>
+
+  <!-- 智能家居设备 (HA 适配器) -->
+  <div class="card">
+    <div class="card-title"><span>智能家居设备 (Home Assistant 适配器)</span></div>
+    <div id="ha-list" class="grid"></div>
+  </div>
+
+  <script>
+    const chatBox = document.getElementById("chat-box");
+    const cmdInput = document.getElementById("cmd-input");
+
+    function appendMsg(role, text) {
+      const div = document.createElement("div");
+      div.className = "msg " + role;
+      div.textContent = (role === "user" ? "你: " : role === "bot" ? "AllLink: " : "") + text;
+      chatBox.appendChild(div);
+      chatBox.scrollTop = chatBox.scrollHeight;
+    }
+
+    async function api(path, method = "GET", body = null) {
+      const opts = { method, headers: { "Content-Type": "application/json" } };
+      if (body) opts.body = JSON.stringify(body);
+      const res = await fetch(path, opts);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || "请求失败");
+      return data;
+    }
+
+    async function sendChat() {
+      const text = cmdInput.value.trim();
+      if (!text) return;
+      cmdInput.value = "";
+      appendMsg("user", text);
+      try {
+        const res = await api("/api/chat", "POST", { message: text, source: navigator.platform || "web" });
+        appendMsg("bot", res.reply);
+        refreshAll();
+      } catch (err) {
+        appendMsg("sys", "执行失败: " + err.message);
+      }
+    }
+
+    async function discoverHomePods() {
+      const box = document.getElementById("homepod-list");
+      box.innerHTML = '<div class="device-item">正在扫描局域网 mDNS 设备...</div>';
+      try {
+        const res = await api("/api/homepod/discover");
+        if (!res.devices.length) {
+          box.innerHTML = '<div class="device-item">未发现 HomePod，请检查是否同局域网并开启“家庭”App 访问权限。</div>';
+          return;
+        }
+        box.innerHTML = res.devices.map(d => `
+          <div class="device-item">
+            <div><span class="status-dot"></span><strong>${d.name}</strong></div>
+            <div style="color:#94a3b8;font-size:12px">${d.address} · ${d.model}</div>
+            <div class="btn-row">
+              <button class="btn-sm" onclick="hpPlayback('${d.name}','toggle')">播放/暂停</button>
+              <button class="btn-sm secondary" onclick="hpVolume('${d.name}', 35)">音量35%</button>
+              <button class="btn-sm secondary" onclick="hpTTS('${d.name}')">测试播报</button>
+            </div>
+          </div>
+        `).join("");
+      } catch (e) {
+        box.innerHTML = `<div class="device-item">扫描失败: ${e.message}</div>`;
+      }
+    }
+
+    async function hpPlayback(name, action) {
+      try {
+        const r = await api("/api/homepod/playback", "POST", { device_name: name, action });
+        appendMsg("sys", r.message);
+      } catch (e) { appendMsg("sys", e.message); }
+    }
+
+    async function hpVolume(name, level) {
+      try {
+        const r = await api("/api/homepod/volume", "POST", { device_name: name, level });
+        appendMsg("sys", r.message);
+      } catch (e) { appendMsg("sys", e.message); }
+    }
+
+    async function hpTTS(name) {
+      try {
+        const r = await api("/api/homepod/tts", "POST", { device_name: name, text: "你好，AllLink 智能中枢已成功连接 HomePod。" });
+        appendMsg("sys", r.message);
+      } catch (e) { appendMsg("sys", e.message); }
+    }
+
+    async function loadPCs() {
+      const box = document.getElementById("pc-list");
+      const res = await api("/api/computers");
+      if (!res.devices.length) {
+        box.innerHTML = '<div class="device-item">暂无在线电脑，请在 Windows / Mac 运行 agents/pc_agent.py</div>';
+        return;
+      }
+      box.innerHTML = res.devices.map(d => `
+        <div class="device-item">
+          <div><span class="status-dot"></span><strong>${d.name}</strong> (${d.os_type})</div>
+          <div style="color:#94a3b8;font-size:12px">ID: ${d.device_id}</div>
+          <div class="btn-row">
+            <button class="btn-sm" onclick="pcCmd('${d.device_id}','lock_screen')">锁屏</button>
+            <button class="btn-sm secondary" onclick="pcCmd('${d.device_id}','mute')">静音</button>
+            <button class="btn-sm secondary" onclick="pcCmd('${d.device_id}','shutdown_timer', 30)">30分钟关机</button>
+            <button class="btn-sm secondary" onclick="pcCmd('${d.device_id}','cancel_shutdown')">取消关机</button>
+          </div>
+        </div>
+      `).join("");
+    }
+
+    async function pcCmd(id, action, minutes = null) {
+      try {
+        const r = await api("/api/computers/command", "POST", { target_device: id, action, minutes });
+        appendMsg("sys", r.message);
+      } catch (e) { appendMsg("sys", e.message); }
+    }
+
+    async function loadHA() {
+      const box = document.getElementById("ha-list");
+      const res = await api("/api/smart-home/devices");
+      box.innerHTML = res.devices.map(d => `
+        <div class="device-item">
+          <div><strong>${d.name}</strong> · 状态: <b>${d.state}</b></div>
+          <div style="color:#94a3b8;font-size:12px">${d.entity_id} (${res.mode})</div>
+          <div class="btn-row">
+            <button class="btn-sm" onclick="haCmd('${d.entity_id}','turn_on')">打开</button>
+            <button class="btn-sm secondary" onclick="haCmd('${d.entity_id}','turn_off')">关闭</button>
+          </div>
+        </div>
+      `).join("");
+    }
+
+    async function haCmd(entity_id, action) {
+      try {
+        const r = await api("/api/smart-home/command", "POST", { entity_id, action });
+        appendMsg("sys", r.message);
+        loadHA();
+      } catch (e) { appendMsg("sys", e.message); }
+    }
+
+    // Web Speech API 语音输入
+    let recognition = null;
+    function toggleVoice() {
+      const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
+      if (!SpeechRec) {
+        appendMsg("sys", "当前浏览器不支持 Web Speech API，或因局域网 HTTP 限制被禁用（建议使用手机输入法语音转文字，或在 Chrome 开启 HTTPS/安全源标志）。");
+        return;
+      }
+      const btn = document.getElementById("mic-btn");
+      if (recognition) {
+        recognition.stop();
+        return;
+      }
+      recognition = new SpeechRec();
+      recognition.lang = "zh-CN";
+      recognition.interimResults = false;
+      btn.classList.add("recording");
+      btn.textContent = "聆听中...";
+      recognition.onresult = (e) => {
+        cmdInput.value = e.results[0][0].transcript;
+        sendChat();
+      };
+      recognition.onerror = (e) => appendMsg("sys", "语音识别错误: " + e.error);
+      recognition.onend = () => {
+        btn.classList.remove("recording");
+        btn.textContent = "按住/点击说话";
+        recognition = null;
+      };
+      recognition.start();
+    }
+
+    async function refreshAll() {
+      try {
+        const h = await api("/api/health");
+        document.getElementById("health-badge").textContent =
+          h.llm_configured ? `AI在线 · ${h.llm_model}` : "本地规则模式 (未配API Key)";
+      } catch {
+        document.getElementById("health-badge").textContent = "中枢离线";
+      }
+      await Promise.allSettled([loadPCs(), loadHA()]);
+    }
+
+    refreshAll();
+  </script>
+</body>
+</html>

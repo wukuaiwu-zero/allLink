@@ -1,0 +1,15 @@
+services:
+  alllink-hub:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: alllink-hub
+    restart: unless-stopped
+    # 注意：在 ARM64 Linux 盒子（如 RK3566/香橙派）上使用 host 网络，
+    # 可直接支持 mDNS (AirPlay 发现) 与局域网设备通信。
+    # 在 macOS 上开发调试时，建议直接用宿主机 Python venv 运行，避免 Docker Desktop 虚拟机隔离 mDNS。
+    network_mode: host
+    env_file:
+      - .env
+    volumes:
+      - ./static:/app/static:ro
